@@ -1,6 +1,6 @@
 torch
 transformers
-tensorflow==2.4.0
+tensorflow
 tqdm
 sacremoses
 sacrebleu

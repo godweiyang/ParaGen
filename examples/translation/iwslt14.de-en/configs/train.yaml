@@ -49,22 +49,22 @@ task:
     class: Seq2Seq
     encoder:
       class: TransformerEncoder
-      num_layers: 6
-      d_model: 512
+      num_layers: 2
+      d_model: 64
       n_head: 4
-      dim_feedforward: 1024
+      dim_feedforward: 128
       dropout: 0.3
       activation: 'relu'
     decoder:
       class: TransformerDecoder
-      num_layers: 6
-      d_model: 512
+      num_layers: 2
+      d_model: 64
       n_head: 4
-      dim_feedforward: 1024
+      dim_feedforward: 128
       dropout: 0.3
       activation: 'relu'
     share_embedding: decoder-input-output
-    d_model: 512
+    d_model: 64
   criterion:
     class: LabelSmoothedCrossEntropy
     epsilon: 0.1
@@ -79,8 +79,8 @@ task:
       clip_norm: 0.
       weight_decay: 1e-4
       betas: (0.9, 0.98)
-    max_steps: 50000
-    validate_interval_step: 4000
+    max_steps: 10
+    validate_interval_step: 1
     assess_by: valid.bleu
     save_model_dir: checkpoints
   generator:
@@ -88,7 +88,7 @@ task:
     search:
       class: BeamSearch
       maxlen_coef: (1.2, 10)
-      beam: 5
+      beam: 4
       lenpen: 0.6
   evaluator:
     class: Evaluator

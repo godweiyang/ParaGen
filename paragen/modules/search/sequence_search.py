@@ -1,5 +1,6 @@
 from typing import Optional
 
+import torch
 from torch import Tensor
 
 from paragen.modules.search import AbstractSearch
@@ -18,17 +19,20 @@ class SequenceSearch(AbstractSearch):
         self._bos, self._eos, self._pad = None, None, None
 
     def build(self, decoder, bos, eos, pad, *args, **kwargs):
-        """
-        Build the search algorithm with task instances.
-
-        Args:
-            decoder: decoder of neural model.
-            bos: begin-of-sentence index
-            eos: end-of-sentence index
-            pad: pad index
-        """
         self._decoder = decoder
+        self.num_decoder_layers = self._decoder._num_layers
         self._bos, self._eos, self._pad = bos, eos, pad
+
+    def trace_decoder(self):
+        tgt = torch.zeros([8, 1], dtype=torch.int64)
+        memory = torch.zeros([16, 8, 64])
+        memory_padding_mask = torch.zeros([8, 16])
+        # prevs_layers = [torch.zeros([1, 1, 1]) for _ in range(self.num_decoder_layers)]
+        prevs_layers = torch.zeros([self.num_decoder_layers, 1, 1, 1])
+        self._decoder.eval()
+        self._decoder.reset('infer')
+        with torch.no_grad():
+            self._decoder = torch.jit.trace(self._decoder, (tgt, memory, memory_padding_mask, prevs_layers), check_trace=False)
 
     def forward(self,
                 prev_tokens: Tensor,

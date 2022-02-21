@@ -3,6 +3,8 @@ task:
   mode: evaluate
   src: de
   tgt: en
+  maxlen: 256
+  index_only: True
   tokenizer:
     class: FastBPE
     vocab: resources/vocabulary/vocab
@@ -25,22 +27,22 @@ task:
     class: Seq2Seq
     encoder:
       class: TransformerEncoder
-      num_layers: 6
-      d_model: 512
+      num_layers: 2
+      d_model: 64
       n_head: 4
-      dim_feedforward: 1024
+      dim_feedforward: 128
       dropout: 0.1
       activation: 'relu'
     decoder:
       class: TransformerDecoder
-      num_layers: 6
-      d_model: 512
+      num_layers: 2
+      d_model: 64
       n_head: 4
-      dim_feedforward: 1024
+      dim_feedforward: 128
       dropout: 0.1
       activation: 'relu'
     share_embedding: decoder-input-output
-    d_model: 512
+    d_model: 64
     path: checkpoints/best.pt
   generator:
     class: SequenceGenerator
@@ -48,6 +50,7 @@ task:
       class: GreedySearch
       maxlen_coef: (1.2, 10)
 env:
-  device: cuda
+  device: cpu
 export:
-  path: traced_model.pt
+  path: onnx
+  use_onnx: True

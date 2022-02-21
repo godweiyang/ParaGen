@@ -76,38 +76,72 @@ class SequenceGenerator(AbstractGenerator):
         return decoder_output
 
     def export(self, path, net_input, *args, **kwargs):
-        """
-        Export self to `path` by export model directly
-
-        Args:
-            path: path to store serialized model
-            net_input: fake net_input for tracing the model
-        """
         self.eval()
         self.reset('infer')
         net_input = to_device(net_input, device=self._env.device)
         with torch.no_grad():
             logger.info(f'trace encoder {self._encoder.__class__.__name__}')
             encoder = torch.jit.trace_module(self._encoder, {'forward': net_input['encoder']})
-            logger.info(f'script search {self._search.__class__.__name__}')
-            search = torch.jit.script(self._search)
-        mkdir(path)
+            mkdir(path)
         logger.info(f'save encoder to {path}/encoder')
         with UniIO(f'{path}/encoder', 'wb') as fout:
             torch.jit.save(encoder, fout)
-        logger.info(f'save search to {path}/search')
-        with UniIO(f'{path}/search', 'wb') as fout:
-            torch.jit.save(search, fout)
+
         if 'use_onnx' in kwargs and kwargs['use_onnx']:
             logger.info('exporting onnx model')
-            torch.onnx.export(self,
-                              (net_input['encoder'], net_input['decoder']),
-                              'model.onnx',
-                              strip_doc_string=True,
-                              do_constant_folding=True,
-                              opset_version=11,
-                              )
-            cp('model.onnx', f'{path}/model.onnx')
+            opset_version = 14
+            kwargs = dict(opset_version=opset_version,
+                        do_constant_folding=True,
+                        strip_doc_string=True)
+            input_names = ['prev_tokens', 'memory', 'memory_padding_mask']
+            output_names = ['scores', 'output_tokens']
+            dynamic_axes = {'prev_tokens': {0: 'batch_size', 1: 'start_flag'},
+                            'memory': {0: 'sequence_length', 1: 'batch_size', 2: 'embedding_dimension'},
+                            'memory_padding_mask': {0: 'batch_size', 1: 'sequence_length'},
+                            'scores': {0: 'batch_size'},
+                            'output_tokens': {0: 'batch_size', 1: 'trg_seq_len'}}
+            kwargs['dynamic_axes'] = dynamic_axes
+            kwargs['input_names'] = input_names
+            kwargs['output_names'] = output_names
+            torch.manual_seed(666)
+            prev_tokens = torch.zeros([16, 1], dtype=torch.int64)
+            memory = torch.rand([16, 16, 64])
+            memory_padding_mask = torch.zeros([16, 16])
+            
+            torch.set_printoptions(profile='full')
+            _, torch_decoder_output = self._search(prev_tokens, memory, memory_padding_mask)
+            print('torch_decoder_output: \n', torch_decoder_output)
+            
+            self._search.trace_decoder()
+            with torch.no_grad():
+                logger.info(f'script search {self._search.__class__.__name__}')
+                search = torch.jit.script(self._search)
+            
+            torch.onnx.export(search, (prev_tokens, memory, memory_padding_mask),
+                            f'{path}/greedy_search.onnx', **kwargs)
+
+             # export the encoder
+            encoder_input_names = ['encoder_input']
+            encoder_output_names = ['memory', 'memory_padding_mask']
+            dynamic_axes = {'encoder_input': {0: 'batch_size', 1: 'source_sequence_length'},
+                            'memory': {0: 'sequence_length', 1: 'batch_size', 2: 'embedding_dimension'},
+                            'memory_padding_mask': {0: 'batch_size', 1: 'sequence_length'}}
+            kwargs['dynamic_axes'] = dynamic_axes
+            kwargs['input_names'] = encoder_input_names
+            kwargs['output_names'] = encoder_output_names
+            torch.onnx.export(self._encoder, (net_input['encoder']),
+                              f'{path}/encoder.onnx', **kwargs)
+            import onnxruntime
+            import onnx
+            _, script_decoder_output = search(prev_tokens, memory, memory_padding_mask)
+            print('script_decoder_output: \n', script_decoder_output)
+            input_dict = {'prev_tokens': prev_tokens.numpy(),
+                        'memory': memory.numpy(),
+                        'memory_padding_mask': memory_padding_mask.numpy()}
+            ort_session = onnxruntime.InferenceSession(f'{path}/greedy_search.onnx')
+            _, onnx_decoder_output = ort_session.run(output_names, input_dict)
+            print('onnx_decoder_output: \n', onnx_decoder_output)
+            print('\n ============================== \n')
 
     def load(self):
         """

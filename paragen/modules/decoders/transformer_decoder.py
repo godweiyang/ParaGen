@@ -114,49 +114,43 @@ class TransformerDecoder(AbstractDecoder):
             self._out_proj_bias = nn.Parameter(torch.zeros(out_proj.weight.size(0)))
 
     def forward(self,
-                tgt: torch.Tensor,
-                memory: torch.Tensor,
-                memory_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        r"""
-        Args:
-            tgt: previous tokens in tgt side.
-              :math:`(N, L)` where N is the batch size, L is the target sequence length.
-              E is the embedding dimension.
-            memory: memory for attention.
-              :math:`(M, N, E)`, where M is the memory sequence length, N is the batch size,
-            memory_padding_mask: memory sequence padding mask.
-              :math:`(N, M)` where M is the memory sequence length, N is the batch size.
-
-
-        Returns:
-            - estimated logits.
-              :math:`(N, L, V)` where N is the batch size, L is the target sequence length,
-              V is the vocabulary size.
-        """
-
+            tgt: torch.Tensor,
+            memory: torch.Tensor,
+            memory_padding_mask,
+            prevs_layers):
         x = self._embed(tgt) * self._embed_scale
-
         if self._pos_embed is not None:
             x = x + self._pos_embed(tgt)
         x = self._embed_dropout(x)
 
         x = x.transpose(0, 1)
-
         tgt_mask = create_time_mask(tgt)
         tgt_padding_mask = tgt.eq(self._special_tokens['pad'])
-        for layer in self._layers:
-            x = layer(tgt=x,
-                      memory=memory,
-                      tgt_mask=tgt_mask,
-                      tgt_key_padding_mask=tgt_padding_mask,
-                      memory_key_padding_mask=memory_padding_mask,)
+        x, cache = self._layers[0](tgt=x,
+                                memory=memory,
+                                prevs_layer=prevs_layers[0, :, :, :],
+                                tgt_mask=tgt_mask,
+                                tgt_key_padding_mask=tgt_padding_mask,
+                                memory_key_padding_mask=memory_padding_mask)
+        caches = cache.unsqueeze(0)
+        for i, layer in enumerate(self._layers[1:]):
+            x, cache = layer(tgt=x,
+                             memory=memory,
+                             prevs_layer=prevs_layers[i+1, :, :, :],
+                             tgt_mask=tgt_mask,
+                             tgt_key_padding_mask=tgt_padding_mask,
+                             memory_key_padding_mask=memory_padding_mask,)
+            caches = torch.cat([caches, cache.unsqueeze(0)], dim=0)
+        x = x.transpose(0, 1)
+
         if self._norm is not None:
             x = self._norm(x)
-        x = x.transpose(0, 1)
+
         logits = self._out_proj(x)
         if self._out_proj_bias is not None:
             logits = logits + self._out_proj_bias
-        return logits
+        logits = F.log_softmax(logits, dim=-1)
+        return logits, caches
 
     def reset(self, mode='train'):
         """

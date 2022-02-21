@@ -24,38 +24,22 @@ class GreedySearch(SequenceSearch):
     def forward(self,
                 prev_tokens,
                 memory,
-                memory_padding_mask,
-                target_mask: Optional[torch.Tensor] = None,
-                prev_scores: Optional[torch.Tensor] = None):
-        """
-        Decoding full-step sequence with greedy search
-
-        Args:
-            prev_tokens: previous tokens or prefix of sequence
-            memory: memory for attention.
-              :math:`(M, N, E)`, where M is the memory sequence length, N is the batch size,
-            memory_padding_mask: memory sequence padding mask.
-              :math:`(N, M)` where M is the memory sequence length, N is the batch size.
-            target_mask: target mask indicating blacklist tokens
-              :math:`(B, V)` where B is batch size and V is vocab size
-            prev_scores: scores of previous tokens
-              :math:`(B)` where B is batch size
-
-        Returns:
-            - log probability of generated sequence
-            - generated sequence
-        """
+                memory_padding_mask):
         batch_size = prev_tokens.size(0)
-        scores = create_init_scores(prev_tokens, memory) if prev_scores is None else prev_scores
-        for _ in range(int(memory.size(0) * self._maxlen_a + self._maxlen_b)):
-            logits = self._decoder(prev_tokens, memory, memory_padding_mask)
+        scores = create_init_scores(prev_tokens, memory)
+        prevs_layers = torch.zeros(self.num_decoder_layers, 1, 1, 1)
+        for k in range(int(memory.size(0) * self._maxlen_a + self._maxlen_b)):
+            logits, caches = self._decoder(prev_tokens, memory, memory_padding_mask, prevs_layers)
             logits = logits[:, -1, :]
-            if target_mask is not None:
-                logits = logits.masked_fill(target_mask, float('-inf'))
             next_word_scores, words = logits.max(dim=-1)
             eos_mask = words.eq(self._eos)
             if eos_mask.long().sum() == batch_size:
                 break
-            scores = scores + next_word_scores.masked_fill_(eos_mask, 0.).view(-1)
+            prev_sequence_length = prevs_layers.size(1)
+            feature_dim = caches.size(3)
+            expanded_prevs_layers = prevs_layers.expand(self.num_decoder_layers, prev_sequence_length, batch_size, feature_dim)
+            prevs_layers = torch.cat([expanded_prevs_layers, caches], dim=1)
+
+            scores = scores + next_word_scores.masked_fill_(eos_mask, torch.tensor(0).float()).view(-1)
             prev_tokens = torch.cat([prev_tokens, words.unsqueeze(dim=-1)], dim=-1)
         return scores, prev_tokens

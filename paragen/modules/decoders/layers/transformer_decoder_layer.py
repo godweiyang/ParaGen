@@ -45,32 +45,17 @@ class TransformerDecoderLayer(AbstractDecoderLayer):
         self.dropout2 = nn.Dropout(dropout)
         self.dropout3 = nn.Dropout(dropout)
 
-    def forward(self, tgt: Tensor, memory: Tensor, tgt_mask: Optional[Tensor] = None, memory_mask: Optional[Tensor] = None,
-                tgt_key_padding_mask: Optional[Tensor] = None, memory_key_padding_mask: Optional[Tensor] = None) -> Tensor:
-        r"""
-        Pass the inputs (and mask) through the decoder layer in training mode.
-
-        Args:
-            tgt: the sequence to the decoder layer (required).
-                :math:`(T, B, D)`, where T is sequence length, B is batch size and D is feature dimension
-            memory: the sequence from the last layer of the encoder (required).
-                :math:`(M, B, D)`, where M is memory size, B is batch size and D is feature dimension
-            tgt_mask: the mask for the tgt sequence (optional).
-                :math:`(T, T)`, where T is sequence length.
-            memory_mask: the mask for the memory sequence (optional).
-                :math:`(M, M)`, where M is memory size.
-            tgt_key_padding_mask: the mask for the tgt keys per batch (optional).
-                :math: `(B, T)`, where B is batch size and T is sequence length.
-            memory_key_padding_mask: the mask for the memory keys per batch (optional).
-                :math: `(B, M)`, where B is batch size and M is memory size.
-        """
+    def forward(self, tgt: Tensor, memory: Tensor, prevs_layer,
+                tgt_mask: Optional[Tensor] = None, memory_mask: Optional[Tensor] = None,
+                tgt_key_padding_mask: Optional[Tensor] = None, memory_key_padding_mask: Optional[Tensor] = None):
         if self._mode == 'infer':
             tgt = tgt[-1:]
             tgt_mask, tgt_key_padding_mask = None, None
         residual = tgt
         if self.normalize_before:
             tgt = self.self_attn_norm(tgt)
-        prevs = self._update_cache(tgt) if self._mode == 'infer' else tgt
+        cache = tgt.clone()
+        prevs = self._cal_prevs(tgt, prevs_layer) if self._mode == 'infer' else tgt
         tgt = self.self_attn(tgt, prevs, prevs, attn_mask=tgt_mask,
                              key_padding_mask=tgt_key_padding_mask)[0]
         tgt = self.dropout1(tgt)
@@ -96,7 +81,7 @@ class TransformerDecoderLayer(AbstractDecoderLayer):
         tgt = residual + tgt
         if not self.normalize_before:
             tgt = self.ffn_norm(tgt)
-        return tgt
+        return tgt, cache
 
     def _update_cache(self, cur):
         """
@@ -107,4 +92,13 @@ class TransformerDecoderLayer(AbstractDecoderLayer):
         """
         prev = torch.cat([self._cache['prev'], cur], dim=0) if 'prev' in self._cache else cur
         self._cache['prev'] = prev
+        return prev
+
+    def _cal_prevs(self, cur, prevs):
+        prev_sequence_length = prevs.size(0)
+        batch_size = cur.size(1)
+        feature_dim = cur.size(2)
+        expanded_prev = prevs.expand(prev_sequence_length, batch_size, feature_dim)
+        prev = torch.cat([expanded_prev, cur], dim=0)
+        prev = prev[1:]
         return prev
